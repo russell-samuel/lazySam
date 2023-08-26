@@ -1,0 +1,293 @@
+#!/bin/bash
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+#set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+
+
+#================================ Update Log ======================================
+
+version_number="0.0.1"
+
+# 0.0.1
+#
+# ====== variables ======
+
+script_name=$(basename -s .sh $0)
+
+
+empty_thre='0.5'
+full_thre='0.5'
+output_is_json=false
+mode_quite=false
+comment=''
+klabel=''
+
+print_help(){
+  cat << EOF
+Description:
+
+  get vbm & cbm
+
+Usage:
+
+  ${script_name} [OPTION] Kpoint_x Kpoint_y Kpoint_z [Kpoint_label]
+
+Option:
+
+  -h, --help                          show this help
+  -v, --version                       print version
+  -j, --json                          output to json form 
+  -q, --quite                         quite mode
+  -l, --label  LABEL:str              manual specify a kpoint label
+  -e, --empty-threshold  THRE:float   empty threshold, default ${empty_thre}
+  -f, --full-threshold   THRE:float   full threshold, default ${full_thre}
+                                      (In current version this
+                                      option doesn't work)
+                               
+Example:
+  # find the vbm & cbm and energy diff between them  
+  ${script_name} -j '0.3333 0.3333 0.0'
+
+Note:
+  Energy Diff
+  the energy difference between VBM and CBM is not
+  always band gap, which is only true when the 
+  system is not a conductor. 
+
+
+  Threshold
+  0 <= empty-threshold <= full-threshold <= 1
+  --------------------  ^ -------------------
+  |                     |                   |
+  empty             fractional           full
+
+  occupation below empty-threshold will be considered as 
+  empty, above full-threshold will be considered as full
+  a band which occupation between empty-threshold and 
+  full-threshold can be seen as fractional occupied
+EOF
+}
+
+print_version(){
+  cat << EOF
+  ${script_name} ${version_number}
+EOF
+}
+
+short_options="h,v,j,q,l:,e:,f:"
+long_options="help,version,json,quite,label:,empty-threshold:,full-threshold:"
+
+# parse arguments
+arguments=$(getopt -n ${script_name} --alternative\
+  --options     ${short_options} \
+  --longoptions ${long_options} -- "$@" )
+# exit if getopt failed
+[ $? -ne 0 ] && exit 1
+# send parsed arguments as input arguments
+eval set -- "${arguments}"
+
+while [ -n "$1" ];
+do
+  case $1 in
+    -h|--help)            print_help;                              exit 0 ;;
+    -v|--version)         print_version;                           exit 0 ;;
+    -j|--json)            output_is_json=true;                      shift ;;
+    -q|--quite)           mode_quite=true;                          shift ;;
+    -l|--label)           klabel=$2;                              shift 2 ;;
+    -e|--empty-threshold) empty_thre=$( prettier_float -n -- $2); shift 2 ;;
+    -f|--full-threshold)  full_thre=$( prettier_float -n -- $2);  shift 2 ;;
+    --)            shift; kpoint=(${@});                            break ;;
+    *)                    echo "$1 is not a recognized option!";   exit 1 ;;
+  esac
+done
+
+${output_is_json} && mode_quite=true
+
+
+#kpoints=( $(get_high_sym_kpoints) )
+#echo ${kpoints[@]}
+
+
+#kpoint=(${kpoints[@]:0:4})
+
+# check input fields, count should be no less 3
+if [ $(calc_by_expr -- "${#kpoint[@]} < 3") == '1' ]; then
+  print_help
+  echo "Inputs count less than 3"
+  exit 1
+fi
+
+# check threshold should between 0 and 1
+# if [ $(calc_by_expr -- "${empty_thre} > ${full_thre}") == '1' ]; then
+#   if ! $mode_quite; then
+#     cat 3>&1 1>&2 2>&3 << EOW
+# Warning: empty threshold is larger than full threshold ($empty_thre > $full_thre)!
+#          this is a acceptable, but you should know what you're doing
+# EOW
+#   fi
+# fi
+if [ $(calc_by_expr -- "${empty_thre} >= 0") == '1' ] && \
+   [ $(calc_by_expr -- "${empty_thre} <= 1") == '1' ]; then
+  true
+else
+  echo "Thredsholds should be set between 0 and 1 (empty= $empty_thre full= $full_thre)"
+  exit 1
+fi
+
+
+
+# try to find klabel
+if [ -z "$klabel" ]; then
+  if [ $(calc_by_expr -- "${#kpoint[@]} == 3") == '1' ]; then
+    klabel='undefined'
+  elif [ $(calc_by_expr -- "${#kpoint[@]} > 3") == '1' ]; then
+    klabel=${kpoint[3]}
+  fi
+fi
+
+coords=( $(prettier_float -n -- ${kpoint[@]:0:3}) )
+
+# exit if the kpoint cannot be found
+title=$(get_bands_by_kpoint  ${coords[@]} | sed -n -e 's/k-point//' -e '1p')
+if [ -z "$title" ]; then
+  echo "No bands found at Kpoint (${coords[@]})"
+  exit 0
+fi
+kpoint_no=$( echo $title | awk -F ':' '{print $1}' )
+coords=( $( echo $title | awk -F ':' '{print $2}' ) )
+
+num_eng_occ=( $(get_bands_by_kpoint  ${coords[@]} | sed '1,2d') )
+#num_eng_occ=$(get_bands_by_kpoint  ${coords[@]} | sed '1,2d')
+num_bands=$[${#num_eng_occ[@]} / 3 ]
+
+function occ_by_num() {
+  num=$1
+  echo ${num_eng_occ[$[3 * $num + 2]]}
+}
+
+function eng_by_num() {
+  num=$1
+  echo ${num_eng_occ[$[3 * $num + 1]]}
+}
+
+# note the fermi energy obtain from nscf
+# but the fermi energy had better be obtained from scf
+fermi_energy=$(grep 'Fermi energy' OUTCAR | awk -F ':' '{print $NF}' | sed -e 's/ *//g')
+
+#echo ${num_eng_occ[@]}
+begin=0
+end=$[$num_bands -1]
+
+# begin_occ=$(occ_by_num $begin)
+# end_occ=$(occ_by_num $end)
+# if [ $(calc_by_expr -- "$begin_occ == 1") != '1' ]; then
+#   comment="VBM = CBM = $(($begin+1))"
+#   exit
+# fi
+# if [ $(calc_by_expr -- "$end_occ == 0") != '1' ]; then
+#   comment="VBM = CBM = $(($end + 1))}"
+#   exit
+# fi
+
+if ! $mode_quite; then
+  printf '%10s%10s%10s\n' 'begin' 'mid' 'end'
+  printf '%10s%12s%10s\n'    '->'  '↓'  '<-'
+fi
+while true; do 
+  mid=$[ ($begin + $end) / 2 ]
+  if [ "$begin" == "$mid"  ]; then
+    vbm=$begin
+    cbm=$end
+    break
+  fi
+  if ! $mode_quite; then
+    printf '%10i%10i%10i\n' $[$begin +1] $[$mid +1] $[$end +1]
+  fi
+
+  mid_occ=$(occ_by_num $mid)
+  #mid_occ_comp=$(calc_by_expr -- "$mid_occ == 0")
+  if [ $(calc_by_expr -- "$mid_occ <= ${empty_thre}") == '1' ]; then
+# occ == 0
+    end=$mid
+  else
+# occ != 0
+    begin=$mid
+  fi
+done
+
+vbm_occ=$(occ_by_num $vbm)
+cbm_occ=$(occ_by_num $cbm)
+vbm_eng=$(eng_by_num $vbm)
+cbm_eng=$(eng_by_num $cbm)
+if ! $mode_quite; then
+  printf '   %s\n' '-----------------------------' 
+  printf '%10i%20i\n' $[$begin +1] $[$end +1] 
+  printf '%12s%22s\n'   '↑'   '↑' 
+  printf '%10s%20s\n'  'vbm' 'cbm' 
+  printf '%10s%10s%10s' $vbm_occ $(prettier_float -d5 -- ${empty_thre})  $cbm_occ 
+  printf '  %s\n' '<- occupation (& emtpy threshold)' 
+  printf '%10s%10s%10s' $vbm_eng $(printf '%.4f' $fermi_energy) $cbm_eng 
+  printf '  %s\n' '<- eigen energy (& fermi level)' 
+  printf '%10s%10s%10s' $(calc_by_expr -s4 -- "0 + $vbm_eng - $fermi_energy") \
+                        $(calc_by_expr -s4 -- "0 + $cbm_eng - $vbm_eng") \
+                        $(calc_by_expr -s4 -- "0 + $cbm_eng - $fermi_energy") 
+  printf '  %s\n' "<- shifted energy (& energy diff)" 
+fi
+
+if $output_is_json; then
+comment+=" (use 'jq' command to get better format)"
+  cat << EOJ
+{
+  "kpoint": {
+    "no": $kpoint_no,
+    "coords": [ 
+      ${coords[0]},
+      ${coords[1]},
+      ${coords[2]}
+    ],
+    "x": ${coords[0]},
+    "y": ${coords[1]},
+    "z": ${coords[2]},
+    "label": "${klabel}"
+  },
+  "fermi_energy": $fermi_energy, 
+  "energy_diff": $(calc_by_expr -s4 -- "0 + $cbm_eng - $vbm_eng"),
+  "empty_threshold": $empty_thre,
+  "full_threshold": $full_thre,
+  "vbm": {
+    "band_no": $(( $vbm + 1 )), 
+    "occupation": $vbm_occ,
+    "energy": {
+      "eigen": $vbm_eng, 
+      "shifted": $( calc_by_expr -s4 -- "0 + $vbm_eng - $fermi_energy" )
+    }
+  },
+  "cbm": {
+    "band_no": $(( $cbm + 1 )), 
+    "occupation": $cbm_occ,
+    "energy": {
+      "eigen": $cbm_eng, 
+      "shifted": $( calc_by_expr -s4 -- "0 + $cbm_eng - $fermi_energy" )
+    }
+  },
+  "comment": "$comment"
+}
+EOJ
+fi

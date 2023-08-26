@@ -1,0 +1,209 @@
+#!/bin/bash
+
+script_name=$(basename -s .sh $0)
+
+# strain_min=1
+# strain_step=0.1
+# strain_max=1.5
+
+# calculator
+scale=20
+calc(){
+  expr=$@
+  result=$( echo "scale=${scale}; ${expr}" | bc )
+  printf "%.${scale}f" ${result}
+}
+
+# help message
+print_usage(){
+  cat <<- EOF
+Usage: ${script_name} [OPTIONS]
+  -h, --help           this help
+  -v, --version        version
+  -p, --path=VALUE     path to poscar
+  -d, --distr=VALUE    strain distribution: lx ly alat
+  -r, --ratio=VALUE    strain ratio
+  -o, --output=VALUE   path to output file
+
+Note: only suit for rhombus cell
+
+EOF
+}
+
+# handle option
+short_opts='h,v,r:,p:,d:,o:'
+long_opts='help,version,ratio:,path:,distr:,output:'
+args=$(getopt -a -n "${script_name}" -o $short_opts -l $long_opts -- "$@")
+[ $? -ne 0 ] && exit 1
+eval set -- "${args}"
+#
+while [ -n "$1" ]; do
+  case $1 in 
+    -h|--help) print_usage; exit 0 ;;
+    -v|--version) echo "Version 0.01"; exit 0 ;;
+    -p|--path) path=$2; shift 2 ;;
+    -d|--distr) distr=$2; shift 2 ;;
+    -r|--ratio) strain_ratio=$2; shift 2 ;;
+    -o|--output) output=$2; shift 2 ;;
+    --) shift; break ;;
+    *) echo "Error: unknown argument: $1"; exit 1 ;;
+  esac
+  # shift
+done
+
+# path to poscar
+if [ -z "$path" ]; then
+  path="./POSCAR"
+elif [ ! -f "$path" ]; then
+  echo "Error: file doesn't exist! \"$path\""
+  exit 1
+fi
+
+# strain distribution
+if [ -z "$distr" ]; then
+  echo "Error: you need to specify the distribution of the strain"
+  print_usage
+  exit 1
+fi
+case $distr in
+  lx|ly|alat) true ;;
+  *) echo "Error: \"${distr}\" is not an acceptible distribution!"; print_usage; exit 1 ;;
+esac  
+
+# strain ratio
+# strain_ratio=1.0125
+if [ -z "$strain_ratio" ]; then
+  echo "Error: you need to specify the ratio of the strain"
+  print_usage
+  exit 1
+fi
+
+# output
+if [ -z "$output" ]; then
+  output="./POSCAR.strain.vasp"
+fi
+echo "Output to ${output}"
+if [ -f "$output" ]; then
+  read -N1 -p "File exist, overwrite? [y/n] " iswrite
+  echo
+  if [ "$iswrite" == "y" ]; then
+    true
+  else
+    exit 0
+  fi
+fi
+
+
+# get old length
+vecs=( $( sed -n '3,5p' "${path}" ) )
+echo "OLD lattice vectors:"
+printf "%23.16f%22.16f%22.16f\n" ${vecs[@]}
+alat=$( calc "sqrt(${vecs[0]}^2+${vecs[1]}^2+${vecs[2]}^2)" )
+# suit for rhombus cell only
+# len_old=(
+#   # $(sed -n '3p' "${template_folder}/POSCAR" | awk '{print $1}')  # alat
+#   ${alat}
+#   $(calc "${alat}/2")  # lx
+#   $(calc "${alat}*sqrt(3)")  # ly
+# )
+lx=$( calc "${alat}/2" )  # lx
+ly=$( calc "${lx}*sqrt(3)" )  # ly
+echo "OLD alat, lx, ly: ${alat}, ${lx}, ${ly}"
+
+# apply strain to get new length
+case ${distr} in 
+  lx) lx=$( calc "${lx}*${strain_ratio}" )  ;;
+  ly) ly=$( calc "${ly}*${strain_ratio}" )  ;;
+  alat)
+    lx=$( calc "${lx}*${strain_ratio}" ) 
+    ly=$( calc "${ly}*${strain_ratio}" ) 
+  ;;
+  *)  exit 1  ;;
+esac
+alat=$( calc "sqrt(${lx}^2+${ly}^2)" )
+# l="${alat} ${lx} ${ly}"
+# echo ${l}
+# echo "new alat: ${alat}"
+# echo "new lx: ${lx}"
+# echo "new ly: ${ly}"
+echo "NEW alat, lx, ly: ${alat}, ${lx}, ${ly}"
+
+# calc new vectors
+common=$( calc "2*${ly}/${alat}" )
+height=$( calc "${common}*${lx}" )
+bottom=$( calc "${common}*${ly}" )
+a=(${alat} 0 ${vecs[2]})
+b=($( calc "${alat}-(${bottom})" ) ${height} ${vecs[5]})
+c=(${vecs[@]:6:9})
+#    _
+#    |   **
+#    |   * b   *
+#    h   *   b      *
+#    e   *      b          *
+#    i   *         b             *
+#    g   *           b                 * |_____________ly_____________|  _
+#    h   *              b               *    *                           |
+#    t   *                 b           *           *                     |
+#    |   *                    b       *                   *              lx
+#    |   *                       b   *                          *        |
+#    _   *  *  *  *  *  *  *  *  *  +  a  a  a  a  a  a  a  a  a  a  a   _
+#                                   |_______________alat_______________|
+#        |________________________bottom______________________________|
+#
+#  a/Lx=2*Ly/height    ==> height=             2*Lx*Ly/a
+#  Lx/Ly=height/bottom ==> bottom=height*Ly/Lx=2*Ly*Ly/a
+#
+#    _
+#    |   **
+#    |   * b   *
+#    |   *   b      *
+#    |   *      b          *
+#    |   *         b             *
+#    by  *           b                 * 
+#    |   *              b               *    *                          
+#    |   *                 b           *           *                    
+#    |   *                    b       *                   *             
+#    |   *                       b   *                          *       
+#    _   *  *  *  *  *  *  *  *  *  +  a  a  a  a  a  a  a  a  a  a  a  
+#                                   |_________________ax________________|
+#        |____________bx____________|
+#
+#  ax= alat
+#  ay= 0
+#  az= az_old
+#  bx= alat-bottom
+#  by= height
+#  bz= bz_old
+
+# modify vecs
+vecs=( ${a[@]} ${b[@]} ${c[@]} )
+echo "NEW lattice vectors:"
+printf "%23.16f%22.16f%22.16f\n" ${vecs[@]}
+
+# gen poscar.str
+sed -n '1,2p' ${path} > ${output}
+printf "%23.16f%22.16f%22.16f\n" ${vecs[@]} >> ${output}
+sed -n '6,$p' ${path} >> ${output}
+
+# cat ${output}
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+

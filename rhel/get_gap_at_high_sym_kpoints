@@ -1,0 +1,146 @@
+#!/bin/bash
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+
+
+#================================ Update Log ======================================
+
+version_number="0.0.1"
+
+# 0.0.1
+#
+# ====== variables ======
+
+script_name=$(basename -s .sh $0)
+
+
+empty_thre='0.5'
+full_thre='0.5'
+no_title=false
+
+print_help(){
+  cat << EOF
+Description:
+
+  get energy gap between vbm & cbm at high sym k-points
+
+Usage:
+
+  ${script_name} [OPTION]
+
+Option:
+
+  -h, --help                          show this help
+  -v, --version                       print version
+  -e, --empty-threshold  THRE:float   empty threshold, default ${empty_thre}
+  -f, --full-threshold   THRE:float   full threshold, default ${full_thre}
+  -n, --no-title                    no title
+                               
+Example:
+  # find the vbm & cbm and energy diff between them  
+  ${script_name} -e '0.999'
+
+Note:
+  Energy Diff
+  see 'get_vbm_cbm --help'
+
+  Threshold
+  see 'get_vbm_cbm --help'
+EOF
+}
+
+print_version(){
+  cat << EOF
+  ${script_name} ${version_number}
+EOF
+}
+
+short_options="h,v,,e:,f:,n"
+long_options="help,version,empty-threshold:,full-threshold:,no-title"
+
+# parse arguments
+arguments=$(getopt -n ${script_name} --alternative\
+  --options     ${short_options} \
+  --longoptions ${long_options} -- "$@" )
+# exit if getopt failed
+[ $? -ne 0 ] && exit 1
+# send parsed arguments as input arguments
+eval set -- "${arguments}"
+
+while [ -n "$1" ];
+do
+  case $1 in
+    -h|--help)            print_help;                              exit 0 ;;
+    -v|--version)         print_version;                           exit 0 ;;
+    -e|--empty-threshold) empty_thre=$( prettier_float -n -- $2); shift 2 ;;
+    -f|--full-threshold)  full_thre=$( prettier_float -n -- $2);  shift 2 ;;
+    -n|--no-title)        no_title=true;                            shift ;;
+    --)            shift;                                           break ;;
+    *)                    echo "$1 is not a recognized option!";   exit 1 ;;
+  esac
+done
+
+#ml lo lzsam
+kpoints=( $(get_high_sym_kpoints) )
+kpoints_count=$[ ${#kpoints[@]} / 4 ]
+
+if ! $no_title; then
+  printf '%s %s %s  %s %s %s  %s %s %s\n' \
+  'VBM' 'VBM_occ' 'VBM_eng' 'CBM' 'CBM_occ' 'CBM_eng' 'Eng_gap' 'K_label' 'K-Point_coords'
+fi
+for i in $( seq 0 $[$kpoints_count -1] ) ; do
+  kpoint=(${kpoints[@]:$[$i *4]:4})
+  #echo ${kpoint[@]}
+  coords=(${kpoint[@]:0:3})
+  klabel=${kpoint[3]}
+  #echo "$klabel"
+  #echo $coords
+  #get_bands_by_kpoint  ${coords[@]}
+# occ < 0.99 will be seen as empty
+  json=$(get_vbm_cbm -q -e ${empty_thre} -f ${full_thre} -j -- ${coords[@]})
+  result_arr=($(echo $json | jq  '''
+    .vbm.band_no     , 
+    .vbm.occupation  , 
+    .vbm.energy.eigen, 
+    .cbm.band_no     , 
+    .cbm.occupation  , 
+    .cbm.energy.eigen, 
+    .energy_diff     
+  '''))
+  vbm=${result_arr[0]}
+  vbm_occ=${result_arr[1]}
+  vbm_eng=${result_arr[2]}
+  cbm=${result_arr[3]}
+  cbm_occ=${result_arr[4]}
+  cbm_eng=${result_arr[5]}
+  eng_gap=${result_arr[6]}
+
+#   vbm=$(echo $json | jq '.vbm.band_no')
+#   vbm_occ=$(echo $json | jq '.vbm.occupation')
+# 
+#   cbm=$(echo $json | jq '.cbm.band_no')
+#   cbm_occ=$(echo $json | jq '.cbm.occupation')
+# 
+#   eng_gap=$(echo $json | jq '.energy_diff')
+  printf '%-3i %.5f %.4f  %-3i %.5f %.4f  %.4f  %-6s % .4f % .4f % .4f\n' \
+         $vbm $vbm_occ $vbm_eng $cbm $cbm_occ $cbm_eng $eng_gap ${klabel} ${coords[@]}
+done
+

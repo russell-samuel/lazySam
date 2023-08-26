@@ -1,0 +1,115 @@
+#!/bin/bash
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+
+
+#================================ Update Log ======================================
+
+version_number="0.0.1"
+
+# 0.0.1
+# 实现了-c注释tag，-u取消注释tag，-m修改tag
+
+# ====== variables ======
+
+script_name=$(basename -s .sh $0)
+
+# separator after element name
+sep='[._]'  
+# list all? (PBE/PBEsol, efficiency/precision)
+isall=false
+# fuzzy search
+isfuzzy=false
+
+print_help(){
+  cat << EOF
+Description:
+
+  descibe main functions
+
+Usage:
+
+  ${script_name} [OPTION] [PARAMETER]
+
+Option:
+
+  -h, --help                   show this help
+  -v, --version                print version
+  -p, --path                   path to pseudo-potential (PP) folder
+  -e, --element                element name
+  -a, --all                    list all PPs? 
+                               PBE/PBEsol, efficiency/precision
+  -f, --fuzzy                  fuzzy search
+                               
+Example:
+  find the upf of the Fe element
+    ${script_name} -e "Fe"
+
+EOF
+}
+
+print_version(){
+  cat << EOF
+  ${script_name} ${version_number}
+EOF
+}
+
+short_options="h,v,p:,e:,a,f"
+long_options="help,version,path:,element:,all,fuzzy"
+
+# parse arguments
+arguments=$(getopt -n ${script_name} --alternative\
+  --options     ${short_options} \
+  --longoptions ${long_options} -- "$@" )
+# exit if getopt failed
+[ $? -ne 0 ] && exit 1
+# send parsed arguments as input arguments
+eval set -- "${arguments}"
+
+while [ -n "$1" ];
+do
+  case $1 in
+    -h|--help)    print_help;                             exit 0 ;;
+    -v|--version) print_version;                          exit 0 ;;
+    -p|--path)    pseudo_path=$2;                         shift 2 ;;
+    -e|--element) element=$2;                             shift 2 ;;
+    -a|--all)     isall=true;                             shift ;;
+    -f|--fuzzy)   isfuzzy=true;                           shift ;;
+    --)    shift; [ -z "$element" ] && element=$1; shift; break ;;
+    *)            echo "$1 is not a recognized option!"; exit 1 ;;
+  esac
+done
+
+if [ -z "$pseudo_path" ]; then
+  if [ -z "$PSEUDO_DIR" ]; then
+    echo "EXIT: The path to pseudo-potential folder"
+    exit 1
+  else
+    pseudo_path=$PSEUDO_DIR
+  fi
+fi
+
+[ -z "$element" ] && print_help && exit 1
+[ "$isall" == "true" ] && allsuffix=../ || allsuffix=""
+[ "$isfuzzy" == "true" ] && fop='*' || fop=''
+
+find $pseudo_path/$allsuffix -iname "${fop}${element}${sep}*"
+

@@ -1,0 +1,147 @@
+#!/bin/bash
+
+script_name=$(basename -s .sh $0)
+
+lock_fifo="/tmp/lock_${script_name}.fifo"
+if [ -p "$lock_fifo" ]; then
+  exec 1000<>$lock_fifo
+  true
+else
+  mkfifo $lock_fifo
+  exec 1000<>$lock_fifo
+  echo lock >& $lock_fifo
+fi
+
+#trap """
+#process_count=$(pgrep -c -f $script_name);
+#[ "$process_count" == 1 ] && exec 1000>&- && exec 1000<&- && rm -f $lock_fifo;
+#echo -e '\nKeyboard Interuption'; 
+#exit 0; 
+#""" 2
+
+compare_loading=false
+compare_exe=false
+compare_cpu_ideal=false
+
+# help message
+print_help(){
+  cat 3>&1 1>&2 2>&3 <<- EOF
+Usage: ${script_name} [OPTIONS]
+  -h, --help                    this help
+  -v, --version                 version
+  -c, --command CMD:str         command to execute
+  -l, --loading LOADING:real    loading threshold (execute CMD when less then this)
+  -e, --exe     EXE:str         executable name to wait (execute CMD when count of 
+                                running EXE less then NUM)
+  -i, --ideal   CPU_IDEAL:int   cpu ideal ratio (execute CMD when cpu ideal greater than this)
+  -n, --num     NUM             specify number
+
+Example:
+
+  $script_name -e 'vasp_' -c 'echo Started; mpirun -np 72 -F vasp_std 2>&1 | tee rlx-std.out'
+
+EOF
+}
+
+# handle option
+short_opts='h,v,c:,l:,e:,i:,n:'
+long_opts='help,version,command:,loading:,exe:,ideal:,num:'
+args=$(getopt -a -n "${script_name}" -o $short_opts -l $long_opts -- "$@")
+[ $? -ne 0 ] && exit 1
+eval set -- "${args}"
+#
+while [ -n "$1" ]; do
+  case $1 in 
+    -h|--help) print_help; exit 0 ;;
+    -v|--version) echo "Version 0.01"; exit 0 ;;
+    -c|--command) cmd=$2; shift 2;;
+    -l|--loading) compare_loading=true; max_loading=$2; shift 2 ;;
+    -e|--exe)     compare_exe=true; exe_str=$2 ; shift 2 ;;
+    -i|--ideal)   compare_cpu_ideal=true; max_cpu_ideal=$2 ; shift 2 ;;
+    -n|--num)     num=$2 ; shift 2 ;;
+    --) shift; expr="$@"; break ;;
+    *) echo "Error: unknown argument: $1"; exit 1 ;;
+  esac
+  # shift
+done
+
+if [ -z "$cmd" ]; then
+  echo "No commands to execute"
+  exit 1
+fi
+
+echo 'getting lock ...'
+read < $lock_fifo
+echo 'lock got'
+echo 'waiting ...'
+
+trap """
+echo -e '\nRelease lock'; 
+[ -p $lock_fifo ] && echo lock >& $lock_fifo;
+echo -e '\nKeyboard Interuption'; 
+exit 0; 
+""" 2
+
+while true; do
+
+  test_result=''
+
+  if $compare_loading; then
+    loading=$(uptime | awk '{print $(NF-2)}')
+    loading=${loading/,}
+    [ $(calc_by_expr "$loading < $max_loading") == '1' ] && test_result+=1 || test_result+=0
+  fi
+
+  if $compare_exe; then
+    exe_count=$(pgrep -c "$exe_str")
+    #echo $exe_count
+    [ $(calc_by_expr "$exe_count < ${num:-1}") == '1' ] && test_result+=1 || test_result+=0
+  fi
+
+  if $compare_cpu_ideal; then
+    cpu_ideal=$(vmstat 1 3 | tail -n 1 | awk '{print $(NF-2)}')
+    [ $(calc_by_expr "$cpu_ideal > $max_cpu_ideal") == '1' ] && test_result+=1 || test_result+=0
+  fi 
+
+  grep -q 0 <<< $test_result
+  exit_code=$?
+  #case $exit_code in 
+  #  0) all_passed=false ;;
+  #  1) all_passed=true  ;;
+  #esac
+  if [ "$exit_code" == 0 ]; then
+    #echo waiting ...
+    sleep 10
+  else
+    break
+  fi
+
+done
+
+{
+  sleep 30
+  echo 'releasing lock ...'
+  echo lock >& $lock_fifo
+  echo 'lock released'
+  
+  trap """
+  echo -e '\nKeyboard Interuption'; 
+  exit 0; 
+  """ 2
+} &
+
+{
+  echo 'starting ...'
+  #command $cmd
+  bash <<< $cmd
+} &
+wait
+
+process_count=$(pgrep -c -f $script_name)
+if [ "$process_count" == 1 ] ;then
+  exec 1000>&- 
+  exec 1000<&- 
+  rm -f $lock_fifo
+fi
+
+echo -e '\a\c'

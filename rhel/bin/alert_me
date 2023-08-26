@@ -1,0 +1,18 @@
+#!/bin/bash
+
+max_loading=70
+
+while true; do
+  loading=$(uptime | awk '{print $(NF-2)}')
+  loading=${loading/,} 
+  
+  if [ $(calc_by_expr "$loading < $max_loading" ) == '1' ]; then
+    echo "Loading threshold matched ($loading/$max_loading)"
+    for i in $(seq 3); do
+      echo -e '\a\c'
+      sleep 1.5
+    done
+  fi
+
+  sleep 1m
+done

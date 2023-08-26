@@ -1,0 +1,71 @@
+#!/bin/bash
+
+script_name=$(basename -s .sh $0)
+
+
+scale=0
+
+# help message
+print_usage(){
+  cat 3>&1 1>&2 2>&3 <<- EOF
+Usage: ${script_name} [OPTIONS]
+  -h, --help           this help
+  -v, --version        version
+  -s, --scale=VALUE    output scale (default= $scale)
+
+EOF
+}
+
+# handle option
+short_opts='h,v,s:'
+long_opts='help,version,scale:'
+args=$(getopt -a -n "${script_name}" -o $short_opts -l $long_opts -- "$@")
+[ $? -ne 0 ] && exit 1
+eval set -- "${args}"
+#
+while [ -n "$1" ]; do
+  case $1 in 
+    -h|--help) print_usage; exit 0 ;;
+    -v|--version) echo "Version 0.01"; exit 0 ;;
+    -s|--scale) scale=$2; shift 2 ;;
+    --) shift; expr="$@"; break ;;
+    *) echo "Error: unknown argument: $1"; exit 1 ;;
+  esac
+  # shift
+done
+
+# output scale (default 0)
+#if [ -z "$scale" ]; then
+#  scale=$scale_default
+#fi
+exit_code=$(bc <<< "$scale >= 0")
+if [ "$exit_code" != '1' ]; then
+  echo "Not a valid scale= '$scale'"
+  exit
+fi
+
+
+result=$( echo "scale=${scale}; ${expr}" | bc )
+
+printf "%.${scale}f\n" ${result}
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+

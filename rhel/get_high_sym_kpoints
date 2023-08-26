@@ -1,0 +1,36 @@
+#!/bin/bash
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+
+
+kpoints=( $(sed -n '5,$p' KPOINTS | sort | uniq -d ) )
+
+if [ "$[ ${#kpoints[@]} % 4 ]" != '0' ]; then
+  cat 3>&1 1>&2 2>&3 << EOF
+check the KPOINTS, it should be in this form: 
+
+    kpoint_x  kpoint_y  kpoint_z  kpoint_label
+
+EOF
+  exit 1
+fi
+
+echo ${kpoints[@]}

@@ -1,0 +1,72 @@
+#!/bin/bash
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+
+
+script_name=$(basename $0)
+print_help() {
+  cat 3>&1 1>&2 2>&3 << EOH
+Part of lzsam util
+
+Usage:
+
+    $script_name kpoint_x kpoint_y kpoint_z
+
+NOTE: 
+    the coordinates of kpoint must be a float type, 
+    for example, zero should be '0.0', '0.00' or with more decimals
+    in the current version, the '0' or '.0' is not accepted. 
+
+EOH
+}
+
+kp=(${@})
+# get only the first 3
+kp=(${kp[@]:0:3})
+# rounding, decimal place count = 4
+kp=( $( prettier_float -d4 -- ${kp[@]} ) )
+# remove trailing zeros
+kp=( $( prettier_float -n -- ${kp[@]} ) )
+if [ "${#kp[@]}" != '3' ]; then
+  print_help
+  exit
+fi
+
+
+function get_tag_value() {
+  local tag=$1
+  local file=OUTCAR
+  local tag_val=$(grep $tag $file | sed 's/.*\('$tag' *= *[0-9a-zA-Z\.]\+\).*/\1/')
+  local val=$(echo $tag_val | awk -F '=' '{print $NF}')
+  echo $val
+}
+
+nbands=$(get_tag_value NBANDS)
+
+grep_expr="^ *k-point \+[0-9]\+ \+: \+${kp[0]}\.\?[0-9]* \+${kp[1]}\.\?[0-9]* \+${kp[2]}\.\?[0-9]* *\$"
+begin_line=$(grep -n "$grep_expr" OUTCAR | head -n 1 | awk -F ':' '{print $1}')
+if [ -z "$begin_line" ]; then
+  echo "Not (${kp[@]}) is not a valid K-point"
+  exit
+fi
+end_line=$(( $begin_line + $nbands + 1 ))
+
+sed -n "$begin_line, ${end_line}p" OUTCAR 

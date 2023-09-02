@@ -1,0 +1,225 @@
+#!/bin/bash
+
+script_name=$(basename -s .sh $0)
+
+# strain_min=1
+# strain_step=0.1
+# strain_max=1.5
+
+# calculator
+scale=20
+calc(){
+  expr=$@
+  result=$( echo "scale=${scale}; ${expr}" | bc )
+  printf "%.${scale}f" ${result} 
+}
+
+# help message
+print_usage(){
+  cat <<- EOF
+Usage: ${script_name} [OPTIONS]
+  -h, --help           this help
+  -v, --version        version
+  -p, --path=VALUE     path to poscar
+  -d, --direct=VALUE   direction of vector : a b c
+  -l, --len=VALUE      new length of vector
+  -o, --output=VALUE   path to output file
+  -a, --add=VALUE      increasement of vector
+
+EOF
+}
+
+# handle option
+short_opts='h,v,l:,p:,d:,o:,a:'
+long_opts='help,version,len:,path:,direct:,output:,add:'
+args=$(getopt -a -n "${script_name}" -o $short_opts -l $long_opts -- "$@")
+[ $? -ne 0 ] && exit 1
+eval set -- "${args}"
+#
+while [ -n "$1" ]; do
+  case $1 in 
+    -h|--help) print_usage; exit 0 ;;
+    -V|--version) echo "Version 0.01"; exit 0 ;;
+    -p|--path) path=$2; shift 2 ;;
+    -d|--direct) direct=$2; shift 2 ;;
+    -l|--len) len=$2; shift 2 ;;
+    -a|--add) add=$2; shift 2 ;;
+    -o|--output) output=$2; shift 2;; 
+    --) shift; break ;;
+    *) echo "Error: unknown argument: $1"; exit 1 ;;
+  esac
+  # shift
+done
+
+# path to poscar
+if [ -z "$path" ]; then
+  path="./POSCAR"
+elif [ ! -f "$path" ]; then
+  echo "Error: file doesn't exist! \"$path\""
+  exit 1
+fi
+
+dos2unix $path
+
+# direction of vector
+if [ -z "$direct" ]; then
+  echo "Error: no direction of vector is specified"
+  print_usage
+  exit 1
+fi
+case $direct in
+  a|b|c) true ;;
+  *) echo "Error: \"${direct}\" is not an acceptible direction!"; print_usage; exit 1 ;;
+esac  
+
+# # length of the vector
+# if [ -z "$len" ]; then
+#   echo "Error: length of vector '$direct' is not specified"
+#   print_usage
+#   exit 1
+# fi
+# 
+# add=0.0
+# # increasment of the vector
+# if [ -n "$len" ] && [ -z "$add" ]; then
+#   len=$( calc "$len+$add" )
+# fi
+
+# output
+if [ -z "$output" ]; then
+  output="./POSCAR.elon.vasp"
+fi
+echo "Output to ${output}"
+if [ -f "$output" ]; then
+  read -N1 -p "File exist, overwrite? [y/n] " iswrite
+  echo
+  if [ "$iswrite" == "y" ]; then
+    true
+  else
+    exit 0
+  fi
+fi
+
+
+# get old length
+vecs=( $( sed -n '3,5p' "${path}" ) )
+echo "OLD lattice vectors:"
+#echo ${vecs[@]:3:3}
+#export LC_NUMERIC="en_US.UTF-8"
+#exit
+printf "%23.16f %22.16f %22.16f \n" ${vecs[@]} 
+
+a=( $(echo ${vecs[@]:0:3} ) )
+b=( $(echo ${vecs[@]:3:3} ) )
+c=( $(echo ${vecs[@]:6:3} ) )
+
+function get_len(){
+  local vec=( $@ )
+  echo $( calc "sqrt(${vec[0]}^2+${vec[1]}^2+${vec[2]}^2)" )
+}
+#len_a=$( calc "sqrt(${a[0]}^2+${a[1]}^2+${a[2]}^2)" )
+#len_b=$( calc "sqrt(${b[0]}^2+${b[1]}^2+${b[2]}^2)" )
+#len_c=$( calc "sqrt(${c[0]}^2+${c[1]}^2+${c[2]}^2)" )
+#get_len ${a[@]}
+#get_len ${b[@]}
+#get_len ${c[@]}
+len_a=$(get_len ${a[@]})
+len_b=$(get_len ${b[@]})
+len_c=$(get_len ${c[@]})
+echo "OLD a, b, c: ${len_a}, ${len_b}, ${len_c}"
+
+# change length or add an increasement ?
+if [ -z "$len" ]; then
+  if [ -z "$add" ]; then
+    echo "Error: length/increasement of vector '$direct' is not specified"
+    print_usage
+    exit 1
+  else
+    case $direct in 
+      a) len=$len_a ;;
+      b) len=$len_b ;;
+      c) len=$len_c ;;
+    esac
+    echo -n "New len '$direct': $len + $add = "
+    len=$( calc "$len+$add" )
+    echo "$len"
+  fi
+else
+  if [ -z "$add" ]; then
+    true
+    add=0
+  else
+    echo -n "New len '$direct': $len + $add = "
+    len=$( calc "$len+$add" )
+    echo "$len"
+  fi
+fi
+
+
+# get new corrdinates of vector
+function get_new_cords() {
+  # get ratio
+  local old_len=$1
+  shift
+  local vec=${@}
+  local ratio=$( calc "$len/$old_len" )
+  for cord in ${vec[@]}; do
+    echo $( calc "$ratio*$cord")
+  done
+}
+
+# apply new length to direction
+case ${direct} in 
+  a) 
+    a=( $(get_new_cords $len_a ${a[@]}) )
+    #echo ${a[@]}
+    len_a=$(get_len ${a[@]})
+    #echo len_a=$(get_len ${a[@]})
+  ;;
+  b) 
+    b=( $(get_new_cords $len_b ${b[@]}) )
+    #echo asdfasd ${b[@]}
+    len_b=$(get_len ${b[@]})
+    #echo len_b=$(get_len ${b[@]})
+  ;;
+  c) 
+    c=( $(get_new_cords $len_c ${c[@]}) )
+    len_c=$(get_len ${c[@]})
+  ;;
+  *)  exit 1  ;;
+esac
+echo "NEW a, b, c: ${len_a}, ${len_b}, ${len_c}"
+
+
+# modify vecs
+vecs=( ${a[@]} ${b[@]} ${c[@]} )
+echo "NEW lattice vectors:"
+printf "%23.16f%22.16f%22.16f\n" ${vecs[@]}
+
+# gen poscar.str
+sed -n '1,2p' ${path} > ${output}
+printf "%23.16f%22.16f%22.16f\n" ${vecs[@]} >> ${output} 
+sed -n '6,$p' ${path} >> ${output}
+
+# cat ${output}
+
+################################ Debug Console ################################
+# Read commands but do not execute them.
+# set -n
+
+# Print commands and their arguments as they are executed
+# set -x
+
+
+# Treat unset variables as an error when substituting.
+set -u
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# Set the variable corresponding to option-name:
+# -o pipefail: the return value of a pipeline is the status of the last
+#              command to exit with a non-zero status, or zero if no
+#              command exited with a non-zero status
+set -o pipefail
+

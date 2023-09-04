@@ -70,15 +70,23 @@ if [ -z "$cmd" ]; then
   exit 1
 fi
 
-echo 'getting lock ...'
+echo 'Getting KEY ...'
 read < $lock_fifo
-echo 'lock got'
-echo 'waiting ...'
+echo 'Locked'
+# if one lock get, exhaust all locks
+#isexhausted=false
+#while ! $isexhausted; do
+#  read -t 0.1 < $lock_fifo
+#  # calc_by_expr "$? > 128"
+#  [ "$?" != '0' ] && isexhausted=true
+#done
+echo 'Waiting ...'
 
 trap """
-echo -e '\nRelease lock'; 
+echo -e '\nReleasing KEY ...'; 
 [ -p $lock_fifo ] && echo lock >& $lock_fifo;
-echo -e '\nKeyboard Interuption'; 
+echo 'Unlocked';
+echo 'Keyboard Interuption'; 
 exit 0; 
 """ 2
 
@@ -93,7 +101,7 @@ while true; do
   fi
 
   if $compare_exe; then
-    exe_count=$(pgrep -c "$exe_str")
+    exe_count=$(pgrep -c "$exe_str" -u $USER)
     #echo $exe_count
     [ $(calc_by_expr "$exe_count < ${num:-1}") == '1' ] && test_result+=1 || test_result+=0
   fi
@@ -119,22 +127,21 @@ while true; do
 done
 
 {
-  sleep 30
-  echo 'releasing lock ...'
-  echo lock >& $lock_fifo
-  echo 'lock released'
-  
-  trap """
-  echo -e '\nKeyboard Interuption'; 
-  exit 0; 
-  """ 2
-} &
-
-{
-  echo 'starting ...'
+  echo 'Starting ...'
+  echo "$cmd"
   #command $cmd
   bash <<< $cmd
 } &
+
+sleep 30
+echo 'Releasing KEY ...'
+echo lock >& $lock_fifo
+echo 'Unlocked';
+trap """
+echo -e '\nKeyboard Interuption'; 
+exit 0; 
+""" 2
+
 wait
 
 process_count=$(pgrep -c -f $script_name)
